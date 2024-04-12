@@ -1,0 +1,66 @@
+div:nth-child(1) {
+    background: linear-gradient(to right bottom, #5953FF, #5217B5);
+    border: none;
+    height:70px;
+    width: 100vw;
+}
+
+img {
+  margin: 0;
+  padding: 0;
+  height:70px;
+  width: 200px;
+  position: relative;
+  left: 50%;
+  transform: translateX(-50%);
+}
+body {
+  background: linear-gradient(to right bottom, #262626, #000000);
+  height: 100vh;
+  margin: 0;
+  display: flex;
+  flex-direction: column; /* يحافظ على الترتيب العمودي */
+  justify-content: flex-start; /* يبدأ المحتوى من أعلى الصفحة */
+  align-items: flex-start; /* يحاذي العناصر من الجانب الأيسر */
+}
+div:nth-child(2) img {
+    position: relative;
+  left: 63%;
+  transform: translateX(-50%);
+  height: 200px; /* طول الصورة */
+  width: 300px/* للحفاظ على تناسب النسب */
+}
+#downloadBtn {
+  background-color: green; /* لون الزر */
+  color: white;
+  padding: 20px 70px;
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
+  margin: 5px;
+}
+
+#downloadBtn:hover {
+  border-radius: 5px;
+  background-color: darkgreen; /* تغيير لون الزر عند التحوي عليه */
+}
+div:nth-child(3) #downloadBtn {
+  position: relative;
+  left: 25%;
+  
+}
+div:nth-child(4) h3{
+  background-color: #262626;
+  margin: 5px;
+      position: relative;
+  left: 70%;
+  border-radius: 5px;
+  
+    margin: 5px;
+  padding: px;
+}
+h3 {
+color: #FFFFFF;
+  margin: 0px;
+  padding: 5px;
+}
