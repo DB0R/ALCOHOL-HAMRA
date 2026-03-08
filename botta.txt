@@ -1,0 +1,32 @@
+if tool_api and hasattr(tool_api, 'set_output'):
+        tool_api.set_output(output)
+    
+    # البقاء قيد التشغيل
+    print("\n🔄 SYSTEM IDLE - PRESS CTRL+C TO TERMINATE")
+    try:
+        while True:
+            time.sleep(60)  # حفظ الطاقة
+    except KeyboardInterrupt:
+        print("\n\n👋 SYSTEM TERMINATED")
+
+# ============================================
+# نقطة الدخول - لا شيء سوى التشغيل
+# ============================================
+
+def run(argument="", tool_api_ref=None):
+    """
+    نقطة الدخول الرئيسية - للاستدعاء من Chaquopy
+    """
+    auto_launch(tool_api_ref)
+    return "اكتمل التنفيذ"
+
+if name == "main":
+    print("=" * 60)
+    print("🤖 TELEGRAM IMAGE DESTROYER v3.1")
+    print("⚡ AUTO MODE: ZERO INPUT REQUIRED")
+    print("⚡ SAFE IMAGE HANDLING: ENABLED")
+    print("=" * 60)
+    
+    # تشغيل تلقائي بدون أي شروط
+    auto_launch()
+    
